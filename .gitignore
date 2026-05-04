@@ -1,0 +1,13 @@
+# SolidWorks lock files (created when a file is open)
+~$*
+
+# SolidWorks backup files
+*.bak
+*.SLDBAK
+*.swp.*
+Backup/
+
+# OS junk
+Thumbs.db
+.DS_Store
+desktop.ini
