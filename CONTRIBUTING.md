@@ -1,35 +1,44 @@
-# Contributing
+# How to add to this project
 
-Thanks for wanting to make this project better! Anything is welcome — a new variant, a fix to an existing model, better docs, photos of your build, sourcing tips for cheap parts.
+**The short version:** make a folder for your build inside `variants/`, drop your files in, write a short README, open a pull request. That's it. No rigid structure required.
 
-## Adding a new variant
+---
 
-1. Copy `variants/_template/` to `variants/<your-name>-<motion-system>/` (e.g. `v2-vslot-wheels`, `mini-belt-drive`).
-2. Build your assembly inside `assembly/`. **Reference shared parts from `common/` instead of copying them.**
-3. Put your printable parts (your own SLDPRT files) in `printed-parts/`.
-4. Export STLs of every printable part to `stl/`.
-5. Export the full assembly as STEP to `step/`.
-6. Generate a BOM from your assembly in SolidWorks (Insert → Tables → Bill of Materials → save as `.xlsx`) into `bom/BOM-<your-variant>.xlsx`.
-7. Write a `README.md` for your variant: photo, build difficulty, what's special about it, what salvaged parts it needs.
-8. Open a pull request.
+## Adding a new build
 
-## Editing shared parts
+1. **Make a folder.** Inside `variants/`, create one named after your build — for example `variants/my-vslot-cnc/` or `variants/belt-drive-mini/`.
+2. **Drop your files in it.** SolidWorks parts, STL exports, photos, BOM, anything. Use subfolders if it helps you, or don't — your call.
+3. **Add a `README.md`** with: a photo or render, what motion system it uses, what hardware you salvaged, what hardware to buy. Look at [`variants/v1-shaft-bearing/README.md`](variants/v1-shaft-bearing/README.md) for a template you can copy.
+4. **Open a pull request** on GitHub. We'll merge it.
 
-If you change anything under `common/`, **every variant that uses it is affected**. Open all variant assemblies after your edit and confirm they still build cleanly. Mention any breaking change in your PR description.
+That's the whole process.
 
-## Naming rules
+---
 
-- Lowercase, hyphen-separated: `v2-vslot-wheels`, not `V2 VSlot Wheels`.
-- Variant names should hint at the motion system so people can pick at a glance.
+## Editing an existing build
 
-## PR checklist
+Open the SolidWorks files, change them, save, push (`upload.bat` or `git push`). Everything in `variants/<name>/` belongs to that build's maintainer-list — fix typos and small bugs freely; for bigger changes (different motion system, different bed size), open a discussion first.
 
-- [ ] No `~$*` SolidWorks lock files committed (the `.gitignore` should catch them).
-- [ ] Every printable part has a matching STL in `stl/`.
-- [ ] BOM `.xlsx` is present and reflects the current assembly.
-- [ ] Variant `README.md` has at least one photo or render.
-- [ ] If you edited `common/`, you opened every variant assembly to confirm it still rebuilds.
+## Editing files in `shared/`
 
-## Reusable parts go in `common/`
+Files in `shared/` are referenced by multiple builds. **Changing one of them affects every build that uses it.** Open every assembly that touches the file after your edit, confirm it still rebuilds, and mention the change in your PR.
 
-If your new variant introduces a part that other variants might want (a new motor mount style, a generic bracket), put it in the matching `common/` subfolder instead of inside your variant.
+---
+
+## A few rules to keep things tidy
+
+- **Don't commit SolidWorks lock files** (`~$*.SLDASM`, `~$*.SLDPRT`). The `.gitignore` should catch them, but double-check after closing SolidWorks.
+- **Don't move SolidWorks files in Windows Explorer.** Drag-and-drop breaks assembly references. Use SolidWorks **File → Save As** (with references) or **Pack and Go** instead.
+- **Photos help a lot.** A README with a photo of the real machine is worth ten paragraphs of text.
+- **English isn't required.** Comments and READMEs in any language are fine.
+
+---
+
+## Don't have SolidWorks?
+
+You can still contribute:
+
+- **Print and build** — STL files (when uploaded) work in any slicer.
+- **Documentation** — add tips to [`docs/sourcing-salvage-parts.md`](docs/sourcing-salvage-parts.md), upload build photos, write tutorials.
+- **Open issues** — report bugs you hit, ask questions, suggest variants.
+- **Use FreeCAD or Onshape** — re-create a part there, export STEP, submit it. Multi-CAD is welcome.

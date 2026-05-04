@@ -1,31 +1,40 @@
-# Budget CNC — Built from 3D-Printed Parts and Old 3D-Printer Hardware
+# Open CNC for All
 
-A fully open-source CNC machine you can build with **3D-printed parts and salvaged components from old or broken 3D printers**. Made so that hobbyists, students, and FRC-style teams with no budget can get a real CNC working.
+A CNC machine **anyone** can build — from 3D-printed parts and pieces salvaged from old, broken 3D printers. Designed so students, hobbyists, FRC teams, and anyone with no budget can learn engineering by building real hardware.
 
-> If you have a dead Ender, Anet, CR-10, or any old 3D printer in a drawer — you already have most of the parts.
+> **Got a dead 3D printer in a drawer?** You already have most of the parts.
 
-## Pick a variant
+---
 
-| Variant | Motion system | Salvage friendliness | Status |
+## Builds
+
+| Build | What it uses | How hard | Salvage-friendly |
 |---|---|---|---|
-| [v1-shaft-bearing](variants/v1-shaft-bearing/) | 8 mm smooth rods + LMK8UU bearings + lead screws | ⭐⭐⭐⭐⭐ (almost everything from a dead printer) | In development |
-| [mg15-hiwin-rail](variants/mg15-hiwin-rail/) | HIWIN HG15 linear rails | ⭐⭐ (rails must be bought) | Parts only |
-| _your variant here_ | — | — | Add one! See [CONTRIBUTING.md](CONTRIBUTING.md) |
+| [v1-shaft-bearing](variants/v1-shaft-bearing/) | 8 mm rods + LMK8UU bearings + lead screws | ⭐⭐ Easy | ⭐⭐⭐⭐⭐ Almost everything from a dead printer |
+| [mg15-hiwin-rail](variants/mg15-hiwin-rail/) | HIWIN HG15 linear rails | _help wanted_ | ⭐⭐ Rails must be bought |
 
-## Salvage-first design
+**Want to add your own build?** Yes please. See [CONTRIBUTING.md](CONTRIBUTING.md) — it's two paragraphs.
 
-The point of this project is **don't buy what you can find**. See [docs/sourcing-salvage-parts.md](docs/sourcing-salvage-parts.md) for which parts of a dead 3D printer fit which CNC variant.
+---
 
-## Repository layout
+## Folders
 
-- `common/` — shared models (motors, lead screws, couplers, bearings) used by every variant. **Edit once, every variant updates.**
-- `variants/` — one folder per build. Each has its own assembly, printed parts, STLs, STEP exports, and BOM.
-- `docs/` — assembly guide, salvage-part sourcing guide, photos.
+```
+variants/   ← one folder per CNC build
+shared/     ← parts used by more than one build (motor, coupler, ...)
+docs/       ← assembly guide + where to find old-printer parts
+```
 
-## Contributing
+That's it. Everything else is supporting files (license, contributing guide, upload helper).
 
-We want every kind of variant — rails, bearings + tubes, V-slot, belt-driven, whatever you can dream up. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add one.
+---
+
+## Built from junk: where to find parts
+
+See **[docs/sourcing-salvage-parts.md](docs/sourcing-salvage-parts.md)** for which parts of a dead 3D printer fit which CNC build. Most everything you need (motors, drivers, smooth rods, lead screws, power supply, wiring) lives inside an old i3-style printer.
+
+---
 
 ## License
 
-[CERN-OHL-S v2](LICENSE) — strong copyleft for open hardware. Anyone can build, modify, and sell, but improvements must stay open.
+[CERN-OHL-S v2](LICENSE) — anyone can build, change, or sell, but improvements stay open.
