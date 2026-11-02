@@ -55,6 +55,8 @@ jobs:
             const msg = 'Question bank: ' + f + ' — ' + d.questions.length + ' questions (' + d.source + ')';
             console.log(msg);
             fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, msg + '\n');
+            // Never replace a good release with a build that only has the small built-in set.
+            if (d.questions.length < 1000) { console.error('Official bank missing – not publishing.'); process.exit(1); }
           "
 
       - name: Create Android project

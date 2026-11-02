@@ -12,10 +12,20 @@ const pct = (x) => Math.round(x * 100);
 
 // ---------- platform helpers ----------
 const Cap = window.Capacitor;
+const native = !!Cap?.isNativePlatform?.();
+function plugin(name) {
+  if (!native) return null;
+  try {
+    return Cap.Plugins?.[name] ?? Cap.registerPlugin?.(name) ?? null;
+  } catch {
+    return null;
+  }
+}
+const AppPlugin = plugin('App');
 function buzz(ms) {
   if (!state.settings.vibrate) return;
   try {
-    const H = Cap?.Plugins?.Haptics;
+    const H = plugin('Haptics');
     if (H) H.vibrate({ duration: ms });
     else navigator.vibrate?.(ms);
   } catch {}
@@ -67,9 +77,22 @@ function confirmBox(text, okLabel = 'אישור') {
 }
 function imgTag(q) {
   if (!q.img) return '';
-  const fallback = q.imgRemote ? ` onerror="if(this.src!=='${esc(q.imgRemote)}')this.src='${esc(q.imgRemote)}'"` : '';
-  return `<img class="qimg" src="${esc(q.img)}" alt="תמונה לשאלה" data-zoom="${esc(q.img)}"${fallback}>`;
+  return `<img class="qimg" src="${esc(q.img)}" alt="תמונה לשאלה" data-zoom="${esc(q.img)}"${
+    q.imgRemote ? ` data-remote="${esc(q.imgRemote)}"` : ''
+  } onerror="imgFail(this)">`;
 }
+// Missing image: try the online copy once, then show a clear placeholder.
+window.imgFail = (el) => {
+  const r = el.dataset.remote;
+  if (r && el.src !== r) {
+    el.src = r;
+    return;
+  }
+  const d = document.createElement('div');
+  d.className = 'banner center';
+  d.textContent = '🖼️ התמונה של השאלה לא נטענה (צריך אינטרנט). אפשר ללחוץ "לא יודע/ת" ולהמשיך.';
+  el.replaceWith(d);
+};
 
 // ---------- router ----------
 let route = '';
@@ -95,17 +118,17 @@ $('#backBtn').onclick = () => back();
 function back() {
   if (!$('#modal').hidden) return closeModal();
   if (route.startsWith('/session') && session && session.answered > 0 && session.i < session.queue.length) {
-    confirmBox('לצאת מהתרגול? ההתקדמות שכבר ענית נשמרה.', 'יציאה').then((ok) => ok && go('/', true));
+    confirmBox('לצאת מהתרגול? מה שכבר עניתם נשמר.', 'יציאה').then((ok) => ok && go('/', true));
     return;
   }
   if (route === '/' || route === '') {
-    Cap?.Plugins?.App?.exitApp?.();
+    AppPlugin?.exitApp?.();
     return;
   }
   if (history.length > 1) history.back();
   else go('/', true);
 }
-Cap?.Plugins?.App?.addListener?.('backButton', back);
+AppPlugin?.addListener?.('backButton', back);
 
 app.addEventListener('click', (e) => {
   const z = e.target.closest('[data-zoom]');
@@ -126,62 +149,127 @@ function ring(value, label, sub) {
     <div class="val"><div><b>${pct(value)}%</b><br><span>${esc(sub)}</span></div></div></div>`;
 }
 
+function nextStep() {
+  if (state.exam) return { label: '⏱️ המשך את המבחן הפתוח', sub: 'הטיימר ממשיך לרוץ', run: () => go('/exam') };
+  const nl = nextLesson();
+  const plan = C.todayPlan();
+  // Learn-from-zero: a lesson, then a round of practice, then the next lesson.
+  const g = state.lessonGate;
+  const gateOpen = !g || g.day !== C.today() || C.todayCount() - g.at >= C.ROUND || plan.left === 0;
+  if (nl && gateOpen) {
+    const idx = LESSONS.indexOf(nl) + 1;
+    return { label: `🎓 שיעור ${idx}: ${nl.title}`, sub: 'קריאה של 3 דקות ואז תרגול על הנושא', run: () => go('/lesson?id=' + nl.id) };
+  }
+  if (plan.left > 0) {
+    const rounds = Math.ceil(plan.left / C.ROUND);
+    return {
+      label: `▶️ סבב תרגול (${Math.min(C.ROUND, plan.left)} שאלות)`,
+      sub: `נשארו היום ${plan.due} לחזרה + ${plan.newLeft} חדשות${rounds > 1 ? ` · כ־${rounds} סבבים` : ''}`,
+      run: () => startSession(C.buildDaily(), 'תרגול יומי', { daily: true }),
+    };
+  }
+  const rd = C.readiness();
+  const examToday = state.exams.some((e) => C.today(new Date(e.at)) === C.today());
+  if (rd.enough && rd.pass >= 0.6 && !examToday) {
+    return { label: '📝 מבחן מלא', sub: 'סיימתם את התרגול להיום – זה זמן טוב לבדוק את עצמכם', run: () => go('/exam-intro') };
+  }
+  return {
+    label: '➕ תרגול נוסף (השאלות החלשות)',
+    sub: 'סיימתם את התוכנית להיום 🎉 עוד קצת חיזוק לא יזיק',
+    run: () => startSession(C.buildExtra(C.ROUND), 'תרגול נוסף'),
+  };
+}
+
 routes['/'] = () => {
+  if (!state.onboarded && !Object.keys(state.cards).length) return go('/welcome', true);
   setTitle('תאוריה בכיס', { back: false });
   const t = C.totals();
   const rd = C.readiness();
-  const done = C.todayCount();
-  const goal = state.settings.goal;
-  const daily = C.buildDaily();
+  const plan = C.todayPlan();
   const st = C.streak();
   const nMist = C.mistakes().length;
-  const exam = state.exam;
   const lastExam = state.exams.at(-1);
+  const dleft = C.daysToTest();
+  const step = nextStep();
+  const dayFrac = plan.done + plan.left ? plan.done / (plan.done + plan.left) : 1;
   app.innerHTML = `
     ${!bank.official ? `<div class="banner">מוצג סט תרגול מובנה (${bank.list.length} שאלות). את מאגר השאלות הרשמי המלא אפשר להוריד ב<a href="#/settings">הגדרות</a>.</div>` : ''}
     <section class="card">
       <div class="hero">
-        ${ring(rd.pass, 'סיכוי לעבור', 'סיכוי לעבור')}
+        ${rd.enough ? ring(rd.pass, 'סיכוי לעבור', 'סיכוי לעבור') : ring(rd.coverage, 'כיסוי המאגר', 'מהמאגר נלמד')}
         <div class="stack" style="flex:1">
-          <div><b>${t.seen === 0 ? 'בוא נתחיל!' : rd.pass >= 0.8 ? 'נראה שאתה מוכן 💪' : rd.pass >= 0.4 ? 'בדרך הנכונה' : 'ממשיכים להתאמן'}</b></div>
-          <div class="muted small">ציון צפוי במבחן: ${Math.round(rd.expected)}/${EXAM.size} (עוברים ב־${EXAM.size - EXAM.maxMistakes})</div>
-          <div class="small">יעד יומי: ${Math.min(done, goal)}/${goal}</div>
-          <div class="bar good"><i style="width:${Math.min(100, (done / goal) * 100)}%"></i></div>
+          <div><b>${
+            C.examReady() ? 'מוכנים למבחן! ✅' : t.seen === 0 ? 'בואו נתחיל!' : rd.enough && rd.pass >= 0.8 ? 'כמעט שם 💪' : 'בדרך הנכונה'
+          }</b></div>
+          <div class="muted small">${
+            rd.enough
+              ? `ציון צפוי במבחן: ${Math.round(rd.expected)}/${EXAM.size} (עוברים ב־${EXAM.size - EXAM.maxMistakes})`
+              : `ראיתם ${t.seen} מתוך ${t.total.toLocaleString('he-IL')} שאלות. הסיכוי לעבור יחושב אחרי 15% מהמאגר.`
+          }</div>
+          ${dleft != null && dleft >= 0 ? `<div class="small">📅 ${dleft === 0 ? 'המבחן היום – בהצלחה!' : `עוד ${dleft} ימים למבחן`}</div>` : `<div class="small"><a href="#/settings">📅 הוסיפו תאריך מבחן</a></div>`}
+          <div class="small">היום: ${plan.done} תשובות${plan.left ? ` · נשארו ${plan.left}` : ' · התוכנית הושלמה ✓'}</div>
+          <div class="bar good"><i style="width:${dayFrac * 100}%"></i></div>
         </div>
       </div>
     </section>
-    ${exam ? `<button class="btn primary" data-go="/exam" style="margin-bottom:14px">⏱️ המשך את המבחן שהתחלת</button>` : ''}
+    <button class="btn primary" id="nextStep" style="margin-bottom:4px;min-height:60px">${esc(step.label)}</button>
+    <p class="muted small center" style="margin:0 0 14px">${esc(step.sub)}</p>
     ${pathCard()}
-    <section class="card stack">
-      <div class="row between"><h2 style="margin:0">תרגול יומי</h2>${C.daysToTest() != null && C.daysToTest() >= 0 ? `<span class="chip" style="pointer-events:none">📅 עוד ${C.daysToTest()} ימים למבחן</span>` : ''}</div>
-      <div class="muted small">שאלות חדשות היום: ${Math.min(C.newToday(), C.newTarget())}/${C.newTarget()} · נותרו ${C.unseen().length} שאלות שטרם ראית</div>
-      <p class="muted small" style="margin:0">${
-        daily.length
-          ? `${Math.min(t.due, daily.length)} שאלות לחזרה + ${daily.length - Math.min(t.due, daily.length)} חדשות. שאלות שטעית בהן יחזרו עד שתשלוט בהן.`
-          : 'סיימת את החזרות להיום 🎉 אפשר להמשיך בתרגול נוסף.'
-      }</p>
-      <button class="btn primary" id="startDaily">${daily.length ? `התחל (${daily.length} שאלות)` : 'תרגול נוסף'}</button>
-    </section>
     <div class="tiles">
-      <button class="tile" data-go="/exam-intro"><span class="ico">📝</span><b>מבחן מלא</b><span>${EXAM.size} שאלות · ${EXAM.minutes} דק׳${lastExam ? ` · אחרון: ${lastExam.score}/${lastExam.total}` : ''}</span></button>
-      <button class="tile" data-go="/topics"><span class="ico">📚</span><b>לפי נושא</b><span>תמרורים, חוקים, בטיחות, רכב</span></button>
-      <button class="tile" data-go="/list?kind=mistakes"><span class="ico">🔁</span><b>הטעויות שלי</b><span>${nMist} שאלות לחיזוק</span></button>
-      <button class="tile" data-go="/list?kind=marks"><span class="ico">⭐</span><b>מסומנות</b><span>${state.marks.length} שאלות</span></button>
-      <button class="tile" data-go="/progress"><span class="ico">📈</span><b>התקדמות</b><span>🔥 רצף ${st} ימים</span></button>
-      <button class="tile" data-go="/browse"><span class="ico">🔎</span><b>מאגר השאלות</b><span>${t.total.toLocaleString('he-IL')} שאלות · ${t.known} בשליטה</span></button>
-      <button class="tile" data-go="/learn"><span class="ico">🎓</span><b>שיעורים</b><span>${lessonsDone()}/${LESSONS.length} שיעורים הושלמו</span></button>
-      <button class="tile" data-go="/guide"><span class="ico">💡</span><b>איך ללמוד?</b><span>שיטה, תוכנית וטיפים</span></button>
+      <button class="tile" data-go="/exam-intro"><span class="ico" aria-hidden="true">📝</span><b>מבחן מלא</b><span>${EXAM.size} שאלות · ${EXAM.minutes} דק׳${lastExam ? ` · אחרון: ${lastExam.score}/${lastExam.total}` : ''}</span></button>
+      <button class="tile" data-go="/topics"><span class="ico" aria-hidden="true">📚</span><b>לפי נושא</b><span>תמרורים, חוקים, בטיחות, רכב</span></button>
+      <button class="tile" data-go="/list?kind=mistakes"><span class="ico" aria-hidden="true">🔁</span><b>הטעויות שלי</b><span>${nMist} שאלות לחיזוק</span></button>
+      <button class="tile" data-go="/list?kind=marks"><span class="ico" aria-hidden="true">⭐</span><b>מסומנות</b><span>${state.marks.length} שאלות</span></button>
+      <button class="tile" data-go="/learn"><span class="ico" aria-hidden="true">🎓</span><b>שיעורים</b><span>${lessonsDone()}/${LESSONS.length} הושלמו</span></button>
+      <button class="tile" data-go="/progress"><span class="ico" aria-hidden="true">📈</span><b>התקדמות</b><span>🔥 רצף ${st} ימים</span></button>
+      <button class="tile" data-go="/browse"><span class="ico" aria-hidden="true">🔎</span><b>מאגר השאלות</b><span>${t.total.toLocaleString('he-IL')} שאלות · ${t.known} בשליטה</span></button>
+      <button class="tile" data-go="/guide"><span class="ico" aria-hidden="true">💡</span><b>איך ללמוד?</b><span>שיטה, תוכנית וטיפים</span></button>
     </div>
-    <section class="card stats3">
-      <div><b>${t.seen}</b><span>נלמדו</span></div>
-      <div><b>${t.known}</b><span>בשליטה</span></div>
-      <div><b>${t.due}</b><span>לחזרה היום</span></div>
-    </section>
     <button class="btn ghost" data-go="/settings">⚙️ הגדרות</button>`;
-  const nl = $('#nextLesson');
-  if (nl) nl.onclick = () => go('/lesson?id=' + nl.dataset.id);
-  $('#startDaily').onclick = () =>
-    startSession(daily.length ? daily : C.buildExtra(goal), daily.length ? 'תרגול יומי' : 'תרגול נוסף');
+  $('#nextStep').onclick = step.run;
+};
+
+routes['/welcome'] = () => {
+  setTitle('ברוכים הבאים', { back: false });
+  const def = new Date(Date.now() + 21 * 86400000).toISOString().slice(0, 10);
+  const mins = [
+    [10, 'רגוע', 10],
+    [20, 'רגיל', 20],
+    [30, 'אינטנסיבי', 35],
+    [45, 'מרתון', 50],
+  ];
+  let pick = 1;
+  app.innerHTML = `
+    <section class="card stack center">
+      <div style="font-size:3rem" aria-hidden="true">🚗</div>
+      <h2>לומדים לתאוריה – מאפס ועד מבחן</h2>
+      <p class="muted" style="margin:0">${bank.list.length.toLocaleString('he-IL')} שאלות מהמאגר הרשמי, שיעורים קצרים, וחזרה חכמה על מה שעוד לא יודעים. שתי שאלות ומתחילים.</p>
+    </section>
+    <section class="card stack">
+      <h3>1. מתי המבחן?</h3>
+      <input class="input" type="date" id="wDate" value="${def}">
+      <label class="row small"><input type="checkbox" id="wNoDate"> עוד אין לי תאריך</label>
+    </section>
+    <section class="card stack">
+      <h3>2. כמה זמן ביום?</h3>
+      <div class="seg" id="wMin">${mins.map(([m, l], i) => `<button data-i="${i}" class="${i === pick ? 'on' : ''}">${m} דק׳<br><span class="small">${l}</span></button>`).join('')}</div>
+    </section>
+    <button class="btn primary" id="wGo" style="min-height:60px">בואו נתחיל ←</button>`;
+  app.querySelectorAll('#wMin button').forEach(
+    (b) =>
+      (b.onclick = () => {
+        pick = +b.dataset.i;
+        app.querySelectorAll('#wMin button').forEach((x) => x.classList.toggle('on', x === b));
+      })
+  );
+  $('#wNoDate').onchange = (e) => ($('#wDate').disabled = e.target.checked);
+  $('#wGo').onclick = () => {
+    state.settings.testDate = $('#wNoDate').checked ? '' : $('#wDate').value;
+    state.settings.newPerDay = mins[pick][2];
+    state.onboarded = true;
+    C.save(true);
+    go('/', true);
+  };
 };
 
 // ---------- practice session ----------
@@ -202,6 +290,7 @@ routes['/session'] = () => {
     return render();
   }
   if (!session.cur || session.cur.id !== id || session.cur.pos !== session.i) {
+    session.guess = false;
     const c0 = C.card(id);
     const tag = !c0 ? 'חדשה' : session.re[id] ? 'שוב – לחיזוק' : 'חזרה';
     session.cur = { id, pos: session.i, order: C.shuffle(q.a.map((_, k) => k)), chosen: null, tag };
@@ -228,12 +317,12 @@ routes['/session'] = () => {
       </div>
       ${
         answered
-          ? `<div class="feedback ${ok ? 'good' : 'bad'}">${ok ? '✓ נכון!' : '✗ לא נכון – התשובה הנכונה מסומנת בירוק'}${q.ex ? `<p>${esc(q.ex)}</p>` : ''}${!ok ? `<p class="small muted">השאלה תחזור שוב בעוד כמה שאלות. נסה להסביר לעצמך למה התשובה הירוקה נכונה.</p>${relatedLesson(q)}` : ''}</div>`
+          ? `<div class="feedback ${ok ? 'good' : 'bad'}" role="status" aria-live="polite">${ok ? (cur.guess ? '✓ נכון – אבל ניחשתם, אז השאלה תחזור מחר' : '✓ נכון!') : '✗ לא נכון – התשובה הנכונה מסומנת בירוק'}${q.ex ? `<p>${esc(q.ex)}</p>` : ''}${!ok ? `<p class="small muted">השאלה תחזור שוב בעוד כמה שאלות. נסו להסביר לעצמכם במילים שלכם למה התשובה הירוקה נכונה.</p>${relatedLesson(q)}` : ''}</div>`
           : ''
       }
       <div class="actions">
         <button class="chip ${C.isMarked(id) ? 'on' : ''}" id="markBtn">${C.isMarked(id) ? '⭐ מסומנת' : '☆ סמן'}</button>
-        ${!answered ? `<button class="chip" id="dontKnow">לא יודע/ת</button>` : ''}
+        ${!answered ? `<button class="chip ${session.guess ? 'on' : ''}" id="guess" aria-pressed="${session.guess}">🎲 אני מנחש/ת</button><button class="chip" id="dontKnow">לא יודע/ת</button>` : ''}
       </div>
     </section>
     ${answered ? `<button class="btn primary" id="nextBtn">${session.i + 1 >= session.queue.length ? 'סיום' : 'הבא ←'}</button>` : ''}`;
@@ -245,6 +334,14 @@ routes['/session'] = () => {
   };
   const dk = $('#dontKnow');
   if (dk) dk.onclick = () => answer(-1);
+  const gs = $('#guess');
+  if (gs)
+    gs.onclick = () => {
+      session.guess = !session.guess;
+      cur.guess = session.guess;
+      gs.classList.toggle('on', session.guess);
+      gs.setAttribute('aria-pressed', session.guess);
+    };
   const nx = $('#nextBtn');
   if (nx) {
     nx.onclick = next;
@@ -255,8 +352,9 @@ routes['/session'] = () => {
   function answer(k) {
     cur.chosen = k;
     const correct = k === q.c;
-    // Re-asked questions within the same session do not move the card up again.
-    if (!session.re[id] || !correct) C.grade(id, correct);
+    cur.guess = session.guess;
+    // A correct re-ask or a lucky guess is not "known" yet: it comes back tomorrow.
+    C.grade(id, correct, { relearn: correct && (!!session.re[id] || session.guess) });
     if (!session.re[id]) {
       session.fN = (session.fN ?? 0) + 1;
       if (correct) session.fOk = (session.fOk ?? 0) + 1;
@@ -268,6 +366,11 @@ routes['/session'] = () => {
       const n = (session.re[id] ?? 0) + 1;
       if (n <= 2) {
         session.re[id] = n;
+        // Keep a gap of a few questions before asking again (add fillers near the end).
+        if (session.queue.length - session.i - 1 < 3) {
+          const fill = C.buildExtra(6).filter((x) => !session.queue.includes(x)).slice(0, 3 - (session.queue.length - session.i - 1));
+          session.queue.push(...fill);
+        }
         session.queue.splice(Math.min(session.queue.length, session.i + 4), 0, id);
       }
     }
@@ -288,26 +391,29 @@ function sessionSummary() {
   const acc = s.fN ? (s.fOk ?? 0) / s.fN : 0;
   const mins = Math.max(1, Math.round((Date.now() - s.start) / 60000));
   const wrong = [...s.wrongIds];
+  if (s.daily && C.todayPlan().left === 0) C.markDayDone();
   let lessonNote = '';
   if (s.lessonId) {
     if (!s.recorded) {
       const rec = (state.lessons[s.lessonId] ??= { read: true });
       rec.best = Math.max(rec.best ?? 0, acc);
+      if (acc >= 0.7 && rec.doneDay == null) rec.doneDay = C.today();
+      state.lessonGate = { day: C.today(), at: C.todayCount() };
       s.recorded = true;
       C.save();
     }
     const nextL = LESSONS[LESSONS.findIndex((l) => l.id === s.lessonId) + 1];
     lessonNote =
       acc >= 0.7
-        ? `<p style="margin:0">✅ השיעור הושלם!${nextL ? ` הבא בתור: <b>${esc(nextL.title)}</b>` : ' סיימת את כל המסלול 🎉 מעכשיו – תרגול יומי ומבחנים.'}</p>`
-        : `<p style="margin:0">כדי להשלים את השיעור צריך 70% תשובות נכונות. קרא שוב את הנקודות ונסה שוב – זה בדיוק התהליך הנכון.</p>`;
+        ? `<p style="margin:0">✅ השיעור הושלם!${nextL ? ` הבא בתור: <b>${esc(nextL.title)}</b>` : ' סיימתם את כל המסלול 🎉 מעכשיו – תרגול יומי ומבחנים.'}</p>`
+        : `<p style="margin:0">כדי להשלים את השיעור צריך 70% תשובות נכונות. קראו שוב את הנקודות ונסו שוב – זה בדיוק התהליך הנכון.</p>`;
   }
   app.innerHTML = `
     <section class="card center stack">
       <div style="font-size:2.6rem">${acc >= 0.9 ? '🏆' : acc >= 0.7 ? '👏' : '💪'}</div>
       <h2>${acc >= 0.9 ? 'מצוין!' : acc >= 0.7 ? 'עבודה טובה!' : 'כל טעות היא שיעור'}</h2>
       <div class="stats3"><div><b>${s.answered}</b><span>תשובות</span></div><div><b>${pct(acc)}%</b><span>דיוק</span></div><div><b>${mins}</b><span>דקות</span></div></div>
-      <p class="muted small" style="margin:0">היעד היומי: ${Math.min(C.todayCount(), state.settings.goal)}/${state.settings.goal} · 🔥 רצף ${C.streak()} ימים</p>
+      <p class="muted small" style="margin:0">היום: ${C.todayCount()} תשובות${C.todayPlan().left ? ` · נשארו ${C.todayPlan().left} בתוכנית` : ' · התוכנית היומית הושלמה ✓'} · 🔥 רצף ${C.streak()} ימים</p>
       ${lessonNote}
     </section>
     ${
@@ -322,13 +428,10 @@ function sessionSummary() {
     }
     <div class="stack">
       ${s.lessonId ? `<button class="btn primary" data-go="/learn">למסלול השיעורים</button>` : ''}
-      <button class="btn ${s.lessonId ? '' : 'primary'}" id="more">עוד סבב תרגול</button>
+      <button class="btn ${s.lessonId ? '' : 'primary'}" id="more">${esc(nextStep().label)}</button>
       <button class="btn" data-go="/">למסך הבית</button>
     </div>`;
-  $('#more').onclick = () => {
-    const d = C.buildDaily();
-    startSession(d.length ? d : C.buildExtra(state.settings.goal), d.length ? 'תרגול יומי' : 'תרגול נוסף');
-  };
+  $('#more').onclick = () => nextStep().run();
   session.i = Infinity;
 }
 
@@ -360,7 +463,7 @@ routes['/list'] = (p) => {
   const ids = (isM ? C.mistakes() : state.marks.filter((id) => bank.byId.has(id)));
   if (!ids.length) {
     app.innerHTML = `<div class="empty"><div class="ico">${isM ? '✨' : '⭐'}</div><p>${
-      isM ? 'אין כרגע טעויות לחיזוק. שאלות שתטעה בהן יופיעו כאן עד שתענה עליהן נכון כמה פעמים.' : 'עוד לא סימנת שאלות. לחץ על "☆ סמן" בזמן תרגול כדי לשמור שאלה.'
+      isM ? 'אין כרגע טעויות לחיזוק. שאלות שתטעו בהן יופיעו כאן עד שתענו עליהן נכון כמה פעמים.' : 'עוד לא סימנתם שאלות. לחצו על "☆ סמן" בזמן תרגול כדי לשמור שאלה.'
     }</p></div>`;
     return;
   }
@@ -460,6 +563,12 @@ function fmtTime(ms) {
 routes['/exam'] = () => {
   const ex = state.exam;
   if (!ex) return go('/exam-intro', true);
+  if (!ex.ids.every((id) => bank.byId.has(id))) {
+    state.exam = null;
+    C.save(true);
+    toast('מאגר השאלות עודכן – המבחן הפתוח בוטל');
+    return go('/exam-intro', true);
+  }
   if (Date.now() >= ex.endAt) return finishExam(true);
   const id = ex.ids[ex.i];
   const q = bank.byId.get(id);
@@ -530,7 +639,7 @@ routes['/exam'] = () => {
   $('#submit').onclick = askSubmit;
   async function askSubmit() {
     const un = ex.answers.filter((a) => a == null).length;
-    const msg = un ? `נשארו ${un} שאלות ללא תשובה (ייחשבו כטעות). להגיש בכל זאת?` : ex.flags.length ? `יש ${ex.flags.length} שאלות שסימנת לבדיקה. להגיש?` : 'להגיש את המבחן?';
+    const msg = un ? `נשארו ${un} שאלות ללא תשובה (ייחשבו כטעות). להגיש בכל זאת?` : ex.flags.length ? `יש ${ex.flags.length} שאלות שסימנתם לבדיקה. להגיש?` : 'להגיש את המבחן?';
     if (await confirmBox(msg, 'הגשה')) finishExam(false);
   }
 };
@@ -542,9 +651,11 @@ function finishExam(timeUp) {
   let score = 0;
   const detail = ex.ids.map((id, i) => {
     const q = bank.byId.get(id);
-    const ok = ex.answers[i] === q.c;
+    const ok = !!q && ex.answers[i] === q.c;
     if (ok) score++;
-    C.grade(id, ok);
+    // Unanswered questions count as mistakes in the score but are not graded –
+    // running out of time says nothing about whether you know them.
+    if (q && ex.answers[i] != null) C.grade(id, ok);
     return { id, a: ex.answers[i], o: ex.orders[i] };
   });
   const total = ex.ids.length;
@@ -577,9 +688,9 @@ routes['/exam-result'] = (p) => {
     <section class="card center stack">
       ${e.timeUp ? '<div class="muted">⏱ הזמן נגמר</div>' : ''}
       <div class="result-big ${e.pass ? 'good' : 'bad'}">${e.score}/${e.total}</div>
-      <h2>${e.pass ? '🎉 עברת!' : 'לא עברת הפעם'}</h2>
-      <p class="muted small" style="margin:0">${e.total - e.score} טעויות (מותר עד ${EXAM.maxMistakes}) · ${Math.round(e.secs / 60)} דקות</p>
-      <p class="small" style="margin:0">${e.pass ? 'כדי להיות בטוח, נסה לעבור 3 מבחנים ברצף.' : 'הטעויות נוספו לתרגול היומי שלך – הן יחזרו עד שתשלוט בהן.'}</p>
+      <h2>${e.pass ? '🎉 עברתם!' : 'לא עברתם הפעם'}</h2>
+      <p class="muted small" style="margin:0">${e.total - e.score} טעויות (מותר עד ${EXAM.maxMistakes}) · ${e.secs < 60 ? 'פחות מדקה' : `${Math.round(e.secs / 60)} דקות`}</p>
+      <p class="small" style="margin:0">${C.examReady() ? '✅ עברתם 3 מבחנים ברצף עם עד 2 טעויות – אפשר לקבוע מבחן!' : e.pass ? 'היעד: 3 מבחנים ברצף עם 2 טעויות לכל היותר – ואז קובעים מבחן.' : 'הטעויות נוספו לתרגול היומי – הן יחזרו עד שתשלטו בהן.'}</p>
     </section>
     <div class="seg" style="margin-bottom:14px"><button data-f="wrong" class="${filter === 'wrong' ? 'on' : ''}">טעויות (${items.filter((d) => d.a !== d.q.c).length})</button><button data-f="all" class="${filter === 'all' ? 'on' : ''}">כל השאלות</button></div>
     ${shown
@@ -644,7 +755,8 @@ routes['/progress'] = () => {
     </section>
     <section class="card">
       <h3>מבחנים</h3>
-      ${recent.length ? `<p class="small muted" style="margin-top:0">עברת ${passStreak} מבחנים ברצף · ${state.exams.filter((e) => e.pass).length}/${state.exams.length} עברו בסך הכל</p>
+      <p class="small" style="margin-top:0">${C.examReady() ? '✅ מוכנים: 3 מבחנים ברצף עם עד 2 טעויות. אפשר לקבוע מבחן!' : '🎯 היעד לפני שקובעים מבחן: 3 מבחנים ברצף עם 2 טעויות לכל היותר.'}</p>
+      ${recent.length ? `<p class="small muted" style="margin-top:0">${passStreak} מבחנים עוברים ברצף · ${state.exams.filter((e) => e.pass).length}/${state.exams.length} עברו בסך הכל</p>
       <ul class="list">${recent
         .reverse()
         .map((e) => `<li class="row between"><span>${new Date(e.at).toLocaleDateString('he-IL')}</span><b style="color:${e.pass ? 'var(--good)' : 'var(--bad)'}">${e.score}/${e.total}</b></li>`)
@@ -663,8 +775,9 @@ routes['/settings'] = () => {
     `<div class="stepper"><button data-step="${key}" data-d="${-step}" data-min="${min}" data-max="${maxv}" aria-label="פחות">−</button><b>${s[key]}</b><button data-step="${key}" data-d="${step}" data-min="${min}" data-max="${maxv}" aria-label="יותר">+</button></div>`;
   app.innerHTML = `
     <section class="card">
-      <div class="setting"><span>יעד יומי (שאלות)</span>${stepper('goal', 5, 5, 100)}</div>
-      <div class="setting"><span>שאלות חדשות ביום</span>${stepper('newPerDay', 5, 0, 100)}</div>
+      <div class="setting"><span>שאלות חדשות ביום (לפחות)<br><span class="small muted">עם תאריך מבחן – גדל אוטומטית לפי הצורך</span></span>${stepper('newPerDay', 5, 5, 150)}</div>
+      <div class="setting"><span>מינימום תשובות ביום לרצף 🔥</span>${stepper('goal', 5, 5, 100)}</div>
+      ${native ? `<div class="setting"><span>תזכורת יומית<br><span class="small muted">הודעה בטלפון בשעה קבועה</span></span><div class="row"><input class="input" style="width:auto;min-height:44px" type="time" id="remTime" value="${esc(s.reminder || '')}"><button class="chip" id="remOff" ${s.reminder ? '' : 'hidden'}>כבה</button></div></div>` : ''}
       <div class="setting"><span>תאריך המבחן<br><span class="small muted">האפליקציה תחשב כמה שאלות חדשות צריך ביום</span></span><input class="input" style="width:auto;min-height:40px" type="date" id="testDate" value="${esc(s.testDate)}"></div>
       <div class="setting"><span>גודל טקסט</span>${stepper('fs', 1, 14, 24)}</div>
       <div class="setting"><span>ערכת צבעים</span><div class="seg">${[
@@ -697,6 +810,19 @@ routes['/settings'] = () => {
         render();
       })
   );
+  const rt = $('#remTime');
+  if (rt) {
+    rt.onchange = async () => {
+      const ok = await setReminder(rt.value);
+      toast(ok ? `תזכורת יומית ב־${rt.value}` : 'לא ניתן להפעיל תזכורת – אשרו הרשאת התראות');
+      render();
+    };
+    $('#remOff').onclick = async () => {
+      await setReminder('');
+      toast('התזכורת כובתה');
+      render();
+    };
+  }
   $('#testDate').onchange = (e) => {
     s.testDate = e.target.value;
     C.save();
@@ -714,22 +840,22 @@ routes['/settings'] = () => {
       render();
     } catch (e) {
       console.warn(e);
-      toast('העדכון נכשל – בדוק חיבור לאינטרנט ונסה שוב');
+      toast('העדכון נכשל – בדקו חיבור לאינטרנט ונסו שוב');
       b.disabled = false;
-      b.textContent = '⬇️ נסה שוב';
+      b.textContent = '⬇️ לנסות שוב';
     }
   };
   $('#exp').onclick = async () => {
     const code = C.exportProgress();
     try {
       await navigator.clipboard.writeText(code);
-      toast('הגיבוי הועתק – שמור אותו בהודעה לעצמך');
+      toast('הגיבוי הועתק – שמרו אותו בהודעה לעצמכם');
     } catch {
-      prompt('העתק את הקוד הזה ושמור אותו:', code);
+      prompt('העתיקו את הקוד הזה ושמרו אותו:', code);
     }
   };
   $('#imp').onclick = () => {
-    const code = prompt('הדבק כאן את קוד הגיבוי:');
+    const code = prompt('הדביקו כאן את קוד הגיבוי:');
     if (!code) return;
     try {
       C.importProgress(code);
@@ -749,6 +875,37 @@ routes['/settings'] = () => {
   };
 };
 
+// ---------- daily reminder (local notification) ----------
+async function setReminder(hhmm) {
+  const LN = plugin('LocalNotifications');
+  if (!LN) return false;
+  try {
+    await LN.cancel({ notifications: [{ id: 1 }] });
+    state.settings.reminder = '';
+    if (hhmm) {
+      const perm = await LN.requestPermissions();
+      if (perm.display !== 'granted') return false;
+      const [hour, minute] = hhmm.split(':').map(Number);
+      await LN.schedule({
+        notifications: [
+          {
+            id: 1,
+            title: 'תאוריה בכיס 🚗',
+            body: 'הגיע הזמן לסבב התרגול היומי – 10 דקות וזה מאחוריכם.',
+            schedule: { on: { hour, minute }, allowWhileIdle: true },
+          },
+        ],
+      });
+      state.settings.reminder = hhmm;
+    }
+    C.save(true);
+    return true;
+  } catch (e) {
+    console.warn('reminder', e);
+    return false;
+  }
+}
+
 // ---------- learn from zero ----------
 function lessonDone(id) {
   return (state.lessons[id]?.best ?? 0) >= 0.7;
@@ -763,13 +920,11 @@ function pathCard() {
   const nl = nextLesson();
   if (!nl) return '';
   const done = lessonsDone();
-  const idx = LESSONS.indexOf(nl) + 1;
   return `<section class="card stack">
     <div class="row between"><h2 style="margin:0">🎓 מסלול לימוד מאפס</h2><span class="muted small">${done}/${LESSONS.length}</span></div>
     <div class="bar good"><i style="width:${(done / LESSONS.length) * 100}%"></i></div>
-    <p class="muted small" style="margin:0">${done === 0 ? 'מתחילים מכלום? 10 שיעורים קצרים (3–5 דקות כל אחד), ואחרי כל שיעור תרגול על הנושא.' : 'ממשיכים מאיפה שעצרת.'}</p>
-    <button class="btn primary" id="nextLesson" data-id="${nl.id}">${done === 0 ? 'התחל' : 'המשך'}: שיעור ${idx} – ${esc(nl.title)}</button>
-    ${done === 0 ? `<button class="btn ghost" data-go="/guide">💡 קודם – איך לומדים נכון (2 דקות קריאה)</button>` : ''}
+    <p class="muted small" style="margin:0">${done === 0 ? '10 שיעורים קצרים (3–5 דקות כל אחד). אחרי כל שיעור – תרגול על הנושא, ואז סבב חזרה. הכפתור הכחול למעלה תמיד מוביל לשלב הבא.' : `הבא בתור: ${esc(nl.title)}`}</p>
+    <div class="btn-row"><button class="btn" data-go="/learn">כל השיעורים</button><button class="btn" data-go="/guide">💡 איך לומדים נכון</button></div>
   </section>`;
 }
 function relatedLesson(q) {
@@ -813,8 +968,8 @@ routes['/lesson'] = (p) => {
       .join('')}</ol></section>
     ${l.tip ? `<div class="banner">💡 <b>טיפ למבחן:</b> ${esc(l.tip)}</div>` : ''}
     <section class="card stack">
-      <p class="small muted" style="margin:0">עכשיו נבדוק מה נקלט: ${Math.min(12, qs.length)} שאלות מהמאגר על הנושא. אל תחזור לקרוא באמצע – הניסיון להיזכר הוא מה שמקבע את החומר.</p>
-      <button class="btn primary" id="practice">בוא נתרגל (${Math.min(12, qs.length)} שאלות)</button>
+      <p class="small muted" style="margin:0">עכשיו נבדוק מה נקלט: ${Math.min(12, qs.length)} שאלות מהמאגר על הנושא. לא חוזרים לקרוא באמצע – הניסיון להיזכר הוא מה שמקבע את החומר.</p>
+      <button class="btn primary" id="practice">בואו נתרגל (${Math.min(12, qs.length)} שאלות)</button>
       <div class="btn-row">
         ${idx > 0 ? `<button class="btn" data-go="/lesson?id=${LESSONS[idx - 1].id}">→ הקודם</button>` : ''}
         ${idx < LESSONS.length - 1 ? `<button class="btn" data-go="/lesson?id=${LESSONS[idx + 1].id}">הבא ←</button>` : ''}

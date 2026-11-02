@@ -7,7 +7,7 @@
 const KEY = 'theory.state.v1';
 export const INTERVALS = [0, 1, 2, 4, 8, 16, 32, 64];
 export const MAX_BOX = INTERVALS.length - 1;
-export const KNOWN_BOX = 3;
+export const KNOWN_BOX = 4; // known = answered right on ~3 separate days
 export const EXAM = { size: 30, minutes: 40, maxMistakes: 4 };
 export const TOPICS = {
   rules: { name: 'חוקי התנועה', ico: '🚦' },
@@ -36,7 +36,7 @@ function load() {
 }
 
 export const state = Object.assign(
-  { v: 1, cards: {}, days: {}, exams: [], marks: [], lessons: {}, settings: {}, exam: null, created: Date.now() },
+  { v: 1, cards: {}, days: {}, exams: [], marks: [], lessons: {}, first: { n: 0, ok: 0 }, settings: {}, exam: null, onboarded: false, created: Date.now() },
   load() ?? {}
 );
 state.settings = { ...DEFAULT_SETTINGS, ...state.settings };
@@ -97,20 +97,41 @@ export function isDue(id, t = today()) {
   return !!c && c.due <= t;
 }
 
-/** Record an answer. Returns the updated card. */
-export function grade(id, correct, { countDay = true } = {}) {
+export function testDay() {
+  const left = daysToTest();
+  return left == null ? null : today() + left;
+}
+
+/**
+ * Record an answer. Returns the updated card.
+ * opts.relearn: correct, but should not count as "known" yet (a re-ask in the same
+ *   session, or a lucky guess) – stays in box 1 and comes back tomorrow.
+ */
+export function grade(id, correct, { countDay = true, relearn = false } = {}) {
   const t = today();
   const c = state.cards[id] ?? { b: 0, due: t, s: 0, r: 0, w: 0, streak: 0 };
   const firstTime = c.s === 0;
-  if (firstTime) c.first = t;
+  if (firstTime) {
+    c.first = t;
+    state.first ??= { n: 0, ok: 0 };
+    state.first.n++;
+    if (correct && !relearn) state.first.ok++;
+  }
   c.s++;
   c.last = t;
-  if (correct) {
+  if (correct && relearn) {
+    c.r++;
+    c.b = 1;
+    c.due = t + 1;
+  } else if (correct) {
     c.r++;
     c.streak = (c.streak ?? 0) + 1;
     // Already known on first sight: skip a box so it does not clog reviews.
     c.b = Math.min(MAX_BOX, c.b + (firstTime ? 2 : 1));
     c.due = t + INTERVALS[c.b];
+    // Make sure everything gets one last look shortly before the test.
+    const td = testDay();
+    if (td != null && td - 2 > t) c.due = Math.min(c.due, td - 2);
   } else {
     c.w++;
     c.streak = 0;
@@ -186,18 +207,29 @@ export function daysToTest() {
 export function newTarget() {
   const base = state.settings.newPerDay;
   const left = daysToTest();
-  if (left == null || left <= 0) return base;
-  const studyDays = Math.max(1, left - 3);
+  // Last 3 days: no push for new material – reviews and mock exams instead.
+  if (left == null || left <= 3) return base;
+  const studyDays = left - 3;
   const remaining = unseen().length + newToday();
   return Math.max(base, Math.ceil(remaining / studyDays));
 }
 
-/** Daily session: due reviews first, then fresh questions (capped per day). */
+/** What is left for today: due reviews + new questions still to meet today's target. */
+export function todayPlan() {
+  const due = dueList().length;
+  const newLeft = Math.max(0, Math.min(unseen().length, newTarget() - newToday()));
+  return { due, newLeft, left: due + newLeft, done: todayCount() };
+}
+
+/** One round of daily practice (ROUND questions): due reviews and new questions mixed,
+ *  so new material keeps flowing even when many reviews are due. */
+export const ROUND = 20;
 export function buildDaily() {
-  const size = state.settings.goal;
-  const due = dueList().slice(0, size);
-  const room = Math.max(0, Math.min(size - due.length, newTarget() - newToday()));
-  const fresh = interleave(unseen()).slice(0, room);
+  const plan = todayPlan();
+  const size = Math.min(ROUND, plan.left);
+  const nNew = Math.min(plan.newLeft, Math.max(size - plan.due, Math.ceil(size / 3)));
+  const due = dueList().slice(0, size - nNew);
+  const fresh = interleave(unseen()).slice(0, size - due.length);
   // Mix new items between reviews instead of a block at the end.
   const out = [...due];
   fresh.forEach((q, i) => out.splice(Math.min(out.length, i * 2 + 1), 0, q));
@@ -252,9 +284,17 @@ export function buildExam() {
 // ---------- stats ----------
 /** Estimated probability of answering correctly, from the Leitner box. */
 const P_BY_BOX = [0.35, 0.55, 0.7, 0.82, 0.9, 0.94, 0.96, 0.97];
-export function strength(id) {
+/** Chance of knowing a never-seen question: the learner's own first-attempt accuracy
+ *  (Beta(2,2) prior, so it starts at 50% and moves with evidence). */
+function pUnseen() {
+  const f = state.first ?? { n: 0, ok: 0 };
+  return (f.ok + 2) / (f.n + 4);
+}
+export function strength(id, pu = pUnseen()) {
   const c = state.cards[id];
-  return c ? P_BY_BOX[c.b] : P_BY_BOX[0];
+  if (!c) return pu;
+  const overdue = Math.max(0, today() - c.due);
+  return P_BY_BOX[c.b] * 0.98 ** overdue;
 }
 
 function binomAtLeast(n, p, k) {
@@ -268,12 +308,31 @@ function binomAtLeast(n, p, k) {
 }
 
 export function readiness() {
-  if (!bank.list.length) return { pass: 0, expected: 0 };
-  const p = bank.list.reduce((s, q) => s + strength(q.id), 0) / bank.list.length;
+  if (!bank.list.length) return { pass: 0, expected: 0, coverage: 0, enough: false };
+  const pu = pUnseen();
+  let p = bank.list.reduce((s, q) => s + strength(q.id, pu), 0) / bank.list.length;
+  // Blend in real mock-exam results when there are some.
+  const recent = state.exams.slice(-3);
+  if (recent.length) {
+    const examP = recent.reduce((s, e) => s + e.score / e.total, 0) / recent.length;
+    const w = recent.length / 6; // up to 50% weight
+    p = p * (1 - w) + examP * w;
+  }
+  const seen = bank.list.filter((q) => state.cards[q.id]).length;
+  const coverage = seen / bank.list.length;
   return {
     pass: binomAtLeast(EXAM.size, p, EXAM.size - EXAM.maxMistakes),
     expected: p * EXAM.size,
+    coverage,
+    // Too little data for a meaningful estimate before ~15% of the bank is seen.
+    enough: coverage >= 0.15 || state.exams.length >= 2,
   };
+}
+
+/** "Ready to book the test": 3 passed mock exams in a row with at most 2 mistakes. */
+export function examReady() {
+  const last = state.exams.slice(-3);
+  return last.length === 3 && last.every((e) => e.total - e.score <= 2);
 }
 
 export function topicStats() {
@@ -308,14 +367,21 @@ export function todayCount() {
   return state.days[today()]?.n ?? 0;
 }
 
-/** Consecutive days on which the daily goal (capped at 10) was reached. */
+/** Consecutive days on which the daily goal (capped at 10) was reached,
+ *  or everything planned for the day was finished. */
+export function markDayDone() {
+  const t = today();
+  (state.days[t] ??= { n: 0, ok: 0 }).done = true;
+  save();
+}
 export function streak() {
   const need = Math.min(10, state.settings.goal);
+  const ok = (d) => !!d && (d.n >= need || (d.done && d.n > 0));
   let t = today();
   let s = 0;
-  if ((state.days[t]?.n ?? 0) >= need) s++;
+  if (ok(state.days[t])) s++;
   t--;
-  while ((state.days[t]?.n ?? 0) >= need) {
+  while (ok(state.days[t])) {
     s++;
     t--;
   }

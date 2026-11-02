@@ -12,15 +12,15 @@ Each new build installs over the old one and keeps your progress.
 
 | Feature | How it helps you learn |
 |---|---|
-| **Daily practice** | Spaced repetition (Leitner boxes). Correct answers come back after 1, 2, 4, 8… days. Wrong answers come back the same day, and again later in the same session. |
-| **Full exam** | 30 questions, 40 minutes, pass with at most 4 mistakes, just like the real test. You get no feedback until you submit, then a full review. |
-| **By topic** | Traffic rules, signs, safety, vehicle. Each topic shows a mastery bar. |
-| **My mistakes / bookmarks** | Focused practice on weak questions. |
-| **Progress** | Pass-probability estimate, streak, 14-day activity, per-topic mastery, exam history. |
-| **Question bank** | Search and browse every question. |
-
-Answer order is shuffled every time, so you learn the content and not the answer's position.
-Progress stays on the phone and can be backed up as a text code in Settings.
+| **Onboarding** | Asks for the test date and minutes per day, then sets the daily plan. |
+| **"Continue" button** | Always leads to the right next step: a lesson, then a practice round, then the next lesson, and mock exams when you're ready. |
+| **Learn-from-zero path** | 10 short lessons (key terms, signs by shape and color, right of way, speed, parking, lights, alcohol and fatigue, new driver, safety, vehicle). Each lesson is followed by practice on matching official questions. |
+| **"How to learn" guide** | The method (retrieval practice, spacing, mixing topics), a 2–4 week plan, and how to learn from a mistake. |
+| **Daily practice** | Spaced repetition (Leitner boxes). Correct answers come back after 1, 2, 4, 8… days; wrong answers come back the same day. New questions per day scale with the test date so the whole bank is covered, and every question gets a last review 2 days before the test. |
+| **🎲 "I guessed" / "I don't know"** | A lucky guess doesn't count as known. |
+| **Full exam** | 30 questions, 40 minutes, pass with at most 4 mistakes. "Ready" means 3 passes in a row with at most 2 mistakes. |
+| **Honest readiness** | Pass probability (binomial model on per-question recall, using your own first-try accuracy and mock-exam results). It's shown only after 15% of the bank; before that, coverage is shown instead. |
+| **Also** | Topic practice, mistakes, bookmarks, search the whole bank, streaks, 14-day chart, a daily reminder notification, dark mode, text size, backup code. |
 
 ## Question bank
 
