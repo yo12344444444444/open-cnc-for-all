@@ -70,7 +70,8 @@ export function parseRecord(rec, opts = {}) {
 
   // License categories appear as «B» «C1» ... buttons. If none listed, assume all.
   const allText = strings.map(([, v]) => v).join(' ');
-  const lic = [...allText.matchAll(/«\s*([A-Z0-9]{1,3})\s*»/g)].map((x) => x[1]);
+  // Note: the official file writes "B" with a Cyrillic letter (В, U+0412), so normalise look-alikes.
+  const lic = [...allText.matchAll(/«\s*([A-Za-z0-9\u0400-\u04FF]{1,3})\s*»/g)].map((x) => latinize(x[1]).toUpperCase());
   if (lic.length && license && !lic.includes(license)) return null;
 
   const imgM = allText.match(/<img[^>]+src\s*=\s*["']([^"']+)["']/i);
@@ -80,6 +81,11 @@ export function parseRecord(rec, opts = {}) {
 
   const id = 'g' + (num ?? rec._id ?? hash(title));
   return { id, n: num, q: title, a: answers, c: correct, img, t: topicKey(rec.category ?? '') };
+}
+
+const LOOKALIKE = { 'А': 'A', 'В': 'B', 'С': 'C', 'Е': 'E', 'Н': 'H', 'К': 'K', 'М': 'M', 'О': 'O', 'Р': 'P', 'Т': 'T', 'Х': 'X' };
+function latinize(s) {
+  return s.replace(/[\u0400-\u04FF]/g, (ch) => LOOKALIKE[ch.toUpperCase()] ?? ch);
 }
 
 function hash(s) {

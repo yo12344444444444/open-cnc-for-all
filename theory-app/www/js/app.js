@@ -1,5 +1,6 @@
 import * as C from './core.js';
 import { loadBank, updateBankFromGov } from './data.js';
+import { LESSONS, GUIDE, lessonQuestions, lessonFor } from './lessons.js';
 
 const { state, bank, TOPICS, EXAM } = C;
 const $ = (s, el = document) => el.querySelector(s);
@@ -150,8 +151,10 @@ routes['/'] = () => {
       </div>
     </section>
     ${exam ? `<button class="btn primary" data-go="/exam" style="margin-bottom:14px">⏱️ המשך את המבחן שהתחלת</button>` : ''}
+    ${pathCard()}
     <section class="card stack">
-      <h2>תרגול יומי</h2>
+      <div class="row between"><h2 style="margin:0">תרגול יומי</h2>${C.daysToTest() != null && C.daysToTest() >= 0 ? `<span class="chip" style="pointer-events:none">📅 עוד ${C.daysToTest()} ימים למבחן</span>` : ''}</div>
+      <div class="muted small">שאלות חדשות היום: ${Math.min(C.newToday(), C.newTarget())}/${C.newTarget()} · נותרו ${C.unseen().length} שאלות שטרם ראית</div>
       <p class="muted small" style="margin:0">${
         daily.length
           ? `${Math.min(t.due, daily.length)} שאלות לחזרה + ${daily.length - Math.min(t.due, daily.length)} חדשות. שאלות שטעית בהן יחזרו עד שתשלוט בהן.`
@@ -165,7 +168,9 @@ routes['/'] = () => {
       <button class="tile" data-go="/list?kind=mistakes"><span class="ico">🔁</span><b>הטעויות שלי</b><span>${nMist} שאלות לחיזוק</span></button>
       <button class="tile" data-go="/list?kind=marks"><span class="ico">⭐</span><b>מסומנות</b><span>${state.marks.length} שאלות</span></button>
       <button class="tile" data-go="/progress"><span class="ico">📈</span><b>התקדמות</b><span>🔥 רצף ${st} ימים</span></button>
-      <button class="tile" data-go="/browse"><span class="ico">🔎</span><b>מאגר השאלות</b><span>${t.known}/${t.total} שולט</span></button>
+      <button class="tile" data-go="/browse"><span class="ico">🔎</span><b>מאגר השאלות</b><span>${t.total.toLocaleString('he-IL')} שאלות · ${t.known} בשליטה</span></button>
+      <button class="tile" data-go="/learn"><span class="ico">🎓</span><b>שיעורים</b><span>${lessonsDone()}/${LESSONS.length} שיעורים הושלמו</span></button>
+      <button class="tile" data-go="/guide"><span class="ico">💡</span><b>איך ללמוד?</b><span>שיטה, תוכנית וטיפים</span></button>
     </div>
     <section class="card stats3">
       <div><b>${t.seen}</b><span>נלמדו</span></div>
@@ -173,15 +178,17 @@ routes['/'] = () => {
       <div><b>${t.due}</b><span>לחזרה היום</span></div>
     </section>
     <button class="btn ghost" data-go="/settings">⚙️ הגדרות</button>`;
+  const nl = $('#nextLesson');
+  if (nl) nl.onclick = () => go('/lesson?id=' + nl.dataset.id);
   $('#startDaily').onclick = () =>
     startSession(daily.length ? daily : C.buildExtra(goal), daily.length ? 'תרגול יומי' : 'תרגול נוסף');
 };
 
 // ---------- practice session ----------
 let session = null;
-function startSession(ids, title) {
+function startSession(ids, title, extra = {}) {
   if (!ids.length) return toast('אין שאלות לתרגול כאן עדיין');
-  session = { title, queue: [...ids], i: 0, answered: 0, correct: 0, re: {}, wrongIds: new Set(), cur: null, start: Date.now() };
+  session = { title, queue: [...ids], i: 0, answered: 0, correct: 0, re: {}, wrongIds: new Set(), cur: null, start: Date.now(), ...extra };
   go('/session');
 }
 
@@ -221,7 +228,7 @@ routes['/session'] = () => {
       </div>
       ${
         answered
-          ? `<div class="feedback ${ok ? 'good' : 'bad'}">${ok ? '✓ נכון!' : '✗ לא נכון – התשובה הנכונה מסומנת בירוק'}${q.ex ? `<p>${esc(q.ex)}</p>` : ''}${!ok ? '<p class="small muted">השאלה תחזור שוב בעוד כמה שאלות.</p>' : ''}</div>`
+          ? `<div class="feedback ${ok ? 'good' : 'bad'}">${ok ? '✓ נכון!' : '✗ לא נכון – התשובה הנכונה מסומנת בירוק'}${q.ex ? `<p>${esc(q.ex)}</p>` : ''}${!ok ? `<p class="small muted">השאלה תחזור שוב בעוד כמה שאלות. נסה להסביר לעצמך למה התשובה הירוקה נכונה.</p>${relatedLesson(q)}` : ''}</div>`
           : ''
       }
       <div class="actions">
@@ -250,6 +257,10 @@ routes['/session'] = () => {
     const correct = k === q.c;
     // Re-asked questions within the same session do not move the card up again.
     if (!session.re[id] || !correct) C.grade(id, correct);
+    if (!session.re[id]) {
+      session.fN = (session.fN ?? 0) + 1;
+      if (correct) session.fOk = (session.fOk ?? 0) + 1;
+    }
     session.answered++;
     if (correct) session.correct++;
     else {
@@ -273,15 +284,31 @@ routes['/session'] = () => {
 function sessionSummary() {
   setTitle('סיכום תרגול');
   const s = session;
-  const acc = s.answered ? s.correct / s.answered : 0;
+  // Accuracy on first attempts (re-asked questions don't count twice).
+  const acc = s.fN ? (s.fOk ?? 0) / s.fN : 0;
   const mins = Math.max(1, Math.round((Date.now() - s.start) / 60000));
   const wrong = [...s.wrongIds];
+  let lessonNote = '';
+  if (s.lessonId) {
+    if (!s.recorded) {
+      const rec = (state.lessons[s.lessonId] ??= { read: true });
+      rec.best = Math.max(rec.best ?? 0, acc);
+      s.recorded = true;
+      C.save();
+    }
+    const nextL = LESSONS[LESSONS.findIndex((l) => l.id === s.lessonId) + 1];
+    lessonNote =
+      acc >= 0.7
+        ? `<p style="margin:0">✅ השיעור הושלם!${nextL ? ` הבא בתור: <b>${esc(nextL.title)}</b>` : ' סיימת את כל המסלול 🎉 מעכשיו – תרגול יומי ומבחנים.'}</p>`
+        : `<p style="margin:0">כדי להשלים את השיעור צריך 70% תשובות נכונות. קרא שוב את הנקודות ונסה שוב – זה בדיוק התהליך הנכון.</p>`;
+  }
   app.innerHTML = `
     <section class="card center stack">
       <div style="font-size:2.6rem">${acc >= 0.9 ? '🏆' : acc >= 0.7 ? '👏' : '💪'}</div>
       <h2>${acc >= 0.9 ? 'מצוין!' : acc >= 0.7 ? 'עבודה טובה!' : 'כל טעות היא שיעור'}</h2>
       <div class="stats3"><div><b>${s.answered}</b><span>תשובות</span></div><div><b>${pct(acc)}%</b><span>דיוק</span></div><div><b>${mins}</b><span>דקות</span></div></div>
       <p class="muted small" style="margin:0">היעד היומי: ${Math.min(C.todayCount(), state.settings.goal)}/${state.settings.goal} · 🔥 רצף ${C.streak()} ימים</p>
+      ${lessonNote}
     </section>
     ${
       wrong.length
@@ -294,7 +321,8 @@ function sessionSummary() {
         : ''
     }
     <div class="stack">
-      <button class="btn primary" id="more">עוד סבב תרגול</button>
+      ${s.lessonId ? `<button class="btn primary" data-go="/learn">למסלול השיעורים</button>` : ''}
+      <button class="btn ${s.lessonId ? '' : 'primary'}" id="more">עוד סבב תרגול</button>
       <button class="btn" data-go="/">למסך הבית</button>
     </div>`;
   $('#more').onclick = () => {
@@ -636,7 +664,8 @@ routes['/settings'] = () => {
   app.innerHTML = `
     <section class="card">
       <div class="setting"><span>יעד יומי (שאלות)</span>${stepper('goal', 5, 5, 100)}</div>
-      <div class="setting"><span>שאלות חדשות ביום (מקסימום)</span>${stepper('newPerDay', 5, 0, 100)}</div>
+      <div class="setting"><span>שאלות חדשות ביום</span>${stepper('newPerDay', 5, 0, 100)}</div>
+      <div class="setting"><span>תאריך המבחן<br><span class="small muted">האפליקציה תחשב כמה שאלות חדשות צריך ביום</span></span><input class="input" style="width:auto;min-height:40px" type="date" id="testDate" value="${esc(s.testDate)}"></div>
       <div class="setting"><span>גודל טקסט</span>${stepper('fs', 1, 14, 24)}</div>
       <div class="setting"><span>ערכת צבעים</span><div class="seg">${[
         ['auto', 'אוטו׳'],
@@ -668,6 +697,11 @@ routes['/settings'] = () => {
         render();
       })
   );
+  $('#testDate').onchange = (e) => {
+    s.testDate = e.target.value;
+    C.save();
+    toast(s.testDate ? `מעכשיו: ${C.newTarget()} שאלות חדשות ביום` : 'תאריך המבחן נמחק');
+  };
   app.querySelectorAll('[data-theme]').forEach((b) => (b.onclick = () => ((s.theme = b.dataset.theme), C.save(), applySettings(), render())));
   app.querySelectorAll('[data-vib]').forEach((b) => (b.onclick = () => ((s.vibrate = b.dataset.vib === '1'), C.save(), render())));
   $('#upd').onclick = async () => {
@@ -713,6 +747,94 @@ routes['/settings'] = () => {
       go('/', true);
     }
   };
+};
+
+// ---------- learn from zero ----------
+function lessonDone(id) {
+  return (state.lessons[id]?.best ?? 0) >= 0.7;
+}
+function lessonsDone() {
+  return LESSONS.filter((l) => lessonDone(l.id)).length;
+}
+function nextLesson() {
+  return LESSONS.find((l) => !lessonDone(l.id));
+}
+function pathCard() {
+  const nl = nextLesson();
+  if (!nl) return '';
+  const done = lessonsDone();
+  const idx = LESSONS.indexOf(nl) + 1;
+  return `<section class="card stack">
+    <div class="row between"><h2 style="margin:0">🎓 מסלול לימוד מאפס</h2><span class="muted small">${done}/${LESSONS.length}</span></div>
+    <div class="bar good"><i style="width:${(done / LESSONS.length) * 100}%"></i></div>
+    <p class="muted small" style="margin:0">${done === 0 ? 'מתחילים מכלום? 10 שיעורים קצרים (3–5 דקות כל אחד), ואחרי כל שיעור תרגול על הנושא.' : 'ממשיכים מאיפה שעצרת.'}</p>
+    <button class="btn primary" id="nextLesson" data-id="${nl.id}">${done === 0 ? 'התחל' : 'המשך'}: שיעור ${idx} – ${esc(nl.title)}</button>
+    ${done === 0 ? `<button class="btn ghost" data-go="/guide">💡 קודם – איך לומדים נכון (2 דקות קריאה)</button>` : ''}
+  </section>`;
+}
+function relatedLesson(q) {
+  const l = lessonFor(q);
+  return l ? `<p><a href="#/lesson?id=${l.id}">📖 לשיעור הקשור: ${esc(l.title)}</a></p>` : '';
+}
+
+routes['/learn'] = () => {
+  setTitle('מסלול לימוד מאפס');
+  const nl = nextLesson();
+  app.innerHTML = `
+    <p class="muted small" style="margin-top:0">עוברים לפי הסדר. כל שיעור – קריאה קצרה ואז תרגול על הנושא. שיעור מושלם כשעונים נכון על 70% בתרגול שלו.</p>
+    ${LESSONS.map((l, i) => {
+      const done = lessonDone(l.id);
+      const isNext = nl && nl.id === l.id;
+      const n = lessonQuestions(l, bank.list).length;
+      return `<button class="tile" style="width:100%;min-height:0;margin-bottom:10px;flex-direction:row;align-items:center;gap:12px;${isNext ? 'border-color:var(--primary);border-width:2px' : ''}" data-go="/lesson?id=${l.id}">
+        <span class="ico">${done ? '✅' : l.ico}</span>
+        <span style="flex:1;color:var(--text)"><b>${i + 1}. ${esc(l.title)}</b><br><span class="muted small">${n} שאלות במאגר${state.lessons[l.id]?.best != null ? ` · הכי טוב: ${pct(state.lessons[l.id].best)}%` : ''}</span></span>
+        ${isNext ? '<span class="chip" style="pointer-events:none">הבא</span>' : ''}
+      </button>`;
+    }).join('')}
+    <button class="btn ghost" data-go="/guide">💡 איך ללמוד נכון</button>`;
+};
+
+routes['/lesson'] = (p) => {
+  const l = LESSONS.find((x) => x.id === p.get('id'));
+  if (!l) return go('/learn', true);
+  const idx = LESSONS.indexOf(l);
+  (state.lessons[l.id] ??= {}).read = true;
+  C.save();
+  setTitle(`שיעור ${idx + 1}: ${l.title}`);
+  const qs = lessonQuestions(l, bank.list);
+  app.innerHTML = `
+    <section class="card"><div style="font-size:2rem">${l.ico}</div><h2>${esc(l.title)}</h2><p style="margin:0">${esc(l.intro)}</p></section>
+    ${l.images ? `<section class="card"><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">${l.images
+      .map((n) => `<img src="img/signs/${n}.svg" alt="" style="width:100%" data-zoom="img/signs/${n}.svg">`)
+      .join('')}</div></section>` : ''}
+    <section class="card"><h3>מה חשוב לדעת</h3><ol class="list" style="padding-inline-start:20px">${l.points
+      .map((pt) => `<li style="list-style:decimal">${esc(pt)}</li>`)
+      .join('')}</ol></section>
+    ${l.tip ? `<div class="banner">💡 <b>טיפ למבחן:</b> ${esc(l.tip)}</div>` : ''}
+    <section class="card stack">
+      <p class="small muted" style="margin:0">עכשיו נבדוק מה נקלט: ${Math.min(12, qs.length)} שאלות מהמאגר על הנושא. אל תחזור לקרוא באמצע – הניסיון להיזכר הוא מה שמקבע את החומר.</p>
+      <button class="btn primary" id="practice">בוא נתרגל (${Math.min(12, qs.length)} שאלות)</button>
+      <div class="btn-row">
+        ${idx > 0 ? `<button class="btn" data-go="/lesson?id=${LESSONS[idx - 1].id}">→ הקודם</button>` : ''}
+        ${idx < LESSONS.length - 1 ? `<button class="btn" data-go="/lesson?id=${LESSONS[idx + 1].id}">הבא ←</button>` : ''}
+      </div>
+    </section>`;
+  $('#practice').onclick = () => {
+    const unseen = C.shuffle(qs.filter((q) => !C.card(q.id)));
+    const seen = qs.filter((q) => C.card(q.id)).sort((a, b) => C.strength(a.id) - C.strength(b.id));
+    const ids = [...unseen.slice(0, 8), ...seen.slice(0, 4), ...unseen.slice(8)].slice(0, 12).map((q) => q.id);
+    startSession(C.shuffle(ids), `תרגול: ${l.title}`, { lessonId: l.id });
+  };
+};
+
+routes['/guide'] = () => {
+  setTitle('איך ללמוד');
+  app.innerHTML = `<section class="card"><h2>${esc(GUIDE.title)}</h2></section>
+    ${GUIDE.sections
+      .map((s) => `<section class="card"><h3>${esc(s.h)}</h3><ul style="margin:0;padding-inline-start:20px">${s.p.map((x) => `<li style="margin-bottom:6px">${esc(x)}</li>`).join('')}</ul></section>`)
+      .join('')}
+    <button class="btn primary" data-go="/learn">🎓 למסלול השיעורים</button>`;
 };
 
 // ---------- keyboard (handy on emulators / tablets with keyboard) ----------

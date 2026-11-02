@@ -17,7 +17,7 @@ export const TOPICS = {
   other: { name: 'כללי', ico: '📘' },
 };
 
-const DEFAULT_SETTINGS = { goal: 20, newPerDay: 15, theme: 'auto', fs: 17, vibrate: true };
+const DEFAULT_SETTINGS = { goal: 20, newPerDay: 20, testDate: '', theme: 'auto', fs: 17, vibrate: true };
 
 export function today(d = new Date()) {
   return Math.floor((d.getTime() - d.getTimezoneOffset() * 60000) / 86400000);
@@ -36,7 +36,7 @@ function load() {
 }
 
 export const state = Object.assign(
-  { v: 1, cards: {}, days: {}, exams: [], marks: [], settings: {}, exam: null, created: Date.now() },
+  { v: 1, cards: {}, days: {}, exams: [], marks: [], lessons: {}, settings: {}, exam: null, created: Date.now() },
   load() ?? {}
 );
 state.settings = { ...DEFAULT_SETTINGS, ...state.settings };
@@ -62,6 +62,7 @@ export function resetProgress() {
   state.days = {};
   state.exams = [];
   state.marks = [];
+  state.lessons = {};
   state.exam = null;
   save(true);
 }
@@ -72,6 +73,7 @@ export function importProgress(text) {
   const s = JSON.parse(decodeURIComponent(escape(atob(text.trim()))));
   if (!s || s.v !== 1 || typeof s.cards !== 'object') throw new Error('bad backup');
   Object.assign(state, s);
+  state.lessons ??= {};
   state.settings = { ...DEFAULT_SETTINGS, ...state.settings };
   save(true);
 }
@@ -171,11 +173,30 @@ export function unseen(pool = bank.list) {
   return pool.filter((q) => !state.cards[q.id]);
 }
 
+/** Days left until the test date (null if not set). */
+export function daysToTest() {
+  const d = state.settings.testDate;
+  if (!d) return null;
+  const t = today(new Date(d + 'T12:00:00'));
+  return Number.isFinite(t) ? t - today() : null;
+}
+
+/** New questions per day: the user's setting, raised if needed to cover the whole bank
+ *  a few days before the test date (leaving the last days for review and exams). */
+export function newTarget() {
+  const base = state.settings.newPerDay;
+  const left = daysToTest();
+  if (left == null || left <= 0) return base;
+  const studyDays = Math.max(1, left - 3);
+  const remaining = unseen().length + newToday();
+  return Math.max(base, Math.ceil(remaining / studyDays));
+}
+
 /** Daily session: due reviews first, then fresh questions (capped per day). */
 export function buildDaily() {
   const size = state.settings.goal;
   const due = dueList().slice(0, size);
-  const room = Math.max(0, Math.min(size - due.length, state.settings.newPerDay - newToday()));
+  const room = Math.max(0, Math.min(size - due.length, newTarget() - newToday()));
   const fresh = interleave(unseen()).slice(0, room);
   // Mix new items between reviews instead of a block at the end.
   const out = [...due];

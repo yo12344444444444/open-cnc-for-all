@@ -69,15 +69,12 @@ async function main() {
     try {
       log('trying resource', id);
       const recs = await fetchResource(id, fetch, log);
-      if (recs[0]) log('sample record:', JSON.stringify(recs[0]).slice(0, 600));
-      // Diagnostics: what license markers look like in this resource.
-      const hist = {};
-      for (const r of recs) {
-        const txt = Object.values(r).filter((v) => typeof v === 'string').join(' ');
-        for (const m of txt.matchAll(/«([^»]{0,40})»/g)) hist[m[1]] = (hist[m[1]] ?? 0) + 1;
+      if (recs[0]) log('sample record:', JSON.stringify(recs[0]).slice(0, 300));
+      const lang = String(recs[0]?.language ?? '');
+      if (lang && !/^he/i.test(lang)) {
+        log('skipping non-Hebrew bank:', lang);
+        continue;
       }
-      log('license markers:', JSON.stringify(Object.entries(hist).sort((a, b) => b[1] - a[1]).slice(0, 40)));
-      for (const r of recs.slice(0, 3)) log('tail:', String(r.description4 ?? '').slice(-700), '| category:', r.category);
       const questions = parseRecords(recs, { license: 'B' });
       const byTopic = questions.reduce((m, q) => ((m[q.t] = (m[q.t] ?? 0) + 1), m), {});
       log(`parsed ${questions.length} license-B questions from ${recs.length} records`, byTopic);
