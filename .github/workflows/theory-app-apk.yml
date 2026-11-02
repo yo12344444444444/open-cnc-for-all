@@ -1,0 +1,95 @@
+# Builds the "תאוריה בכיס" Android app and publishes the APK as a GitHub Release
+# (stable link: releases/download/theory-app-latest/theory-app.apk).
+name: Theory app APK
+
+on:
+  push:
+    paths:
+      - 'theory-app/**'
+      - '.github/workflows/theory-app-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: theory-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: theory-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: theory-app/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Download official question bank (data.gov.il)
+        continue-on-error: true
+        run: node scripts/fetch-questions.mjs
+
+      - name: Check web app
+        run: |
+          node -e "
+            const fs = require('fs');
+            const f = fs.existsSync('www/data/questions.json') ? 'www/data/questions.json' : 'www/data/fallback.json';
+            const d = JSON.parse(fs.readFileSync(f));
+            const bad = d.questions.filter(q => !q.q || q.a.length < 2 || q.c < 0 || q.c >= q.a.length);
+            if (bad.length) { console.error('bad questions', bad.slice(0, 3)); process.exit(1); }
+            const msg = 'Question bank: ' + f + ' — ' + d.questions.length + ' questions (' + d.source + ')';
+            console.log(msg);
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, msg + '\n');
+          "
+
+      - name: Create Android project
+        run: |
+          npx cap add android
+          node scripts/make-icons.mjs
+          npx @capacitor/assets generate --android
+          sed -i 's/versionCode 1$/versionCode ${{ github.run_number }}/; s/versionName "1.0"/versionName "1.0.${{ github.run_number }}"/' android/app/build.gradle
+          sed -i 's/android:launchMode="singleTask"/android:launchMode="singleTask"\n            android:screenOrientation="portrait"/' android/app/src/main/AndroidManifest.xml
+          npx cap sync android
+
+      - name: Use the fixed signing key (so updates install over the old version)
+        run: mkdir -p ~/.android && cp signing/debug.keystore ~/.android/debug.keystore
+
+      - name: Build APK
+        working-directory: theory-app/android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Collect APK
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk theory-app.apk
+          ls -la theory-app.apk
+          echo "APK size: $(du -h theory-app.apk | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: theory-app-apk
+          path: theory-app/theory-app.apk
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete theory-app-latest --cleanup-tag -y || true
+          gh release create theory-app-latest theory-app.apk \
+            --target "$GITHUB_SHA" \
+            --title "תאוריה בכיס – גרסה 1.0.${{ github.run_number }}" \
+            --notes "אפליקציה ללימוד מבחן התאוריה (רישיון B). להתקנה: פתחו את הקובץ theory-app.apk בטלפון ואשרו התקנה ממקור לא ידוע. נבנה מהענף ${{ github.ref_name }}."

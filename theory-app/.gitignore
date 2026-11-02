@@ -1,0 +1,6 @@
+node_modules/
+android/
+assets/
+www/data/questions.json
+www/img/q/
+*.apk

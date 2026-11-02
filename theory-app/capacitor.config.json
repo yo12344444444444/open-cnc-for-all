@@ -1,0 +1,9 @@
+{
+  "appId": "il.theory.pocket",
+  "appName": "תאוריה בכיס",
+  "webDir": "www",
+  "android": { "backgroundColor": "#f5f7fb" },
+  "plugins": {
+    "CapacitorHttp": { "enabled": true }
+  }
+}

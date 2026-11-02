@@ -1,0 +1,24 @@
+{
+  "name": "theory-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "תאוריה בכיס – Israeli driving theory test trainer (Android, offline)",
+  "type": "module",
+  "scripts": {
+    "serve": "python3 -m http.server 8765 --directory www",
+    "questions": "node scripts/fetch-questions.mjs",
+    "fallback": "node scripts/fallback-src.mjs",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.6.0",
+    "@capacitor/haptics": "^8.0.2"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^4.0.0",
+    "@capacitor/cli": "^8.6.0",
+    "sharp": "^0.35.5"
+  }
+}
